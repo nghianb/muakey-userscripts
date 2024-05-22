@@ -31,14 +31,69 @@ function parseCookie(str) {
     }, {});
 }
 
-(function () {
+async function sendFormData(url, data) {
+  const formData = new FormData();
+
+  for (const name in data) {
+    formData.append(name, data[name]);
+  }
+
+  return await fetch(url, {
+    method: "POST",
+    body: formData,
+  });
+}
+
+async function generateRandomHex() {
+  try {
+    const array = new Uint8Array(12);
+    const randomBytes = window.crypto.getRandomValues(array);
+    const hexString = Array.from(randomBytes)
+      .map((byte) => ("0" + byte.toString(16)).slice(-2))
+      .join("");
+    return hexString;
+  } catch (error) {
+    console.error("Error generating random hex:", error);
+    // Handle error appropriately
+  }
+}
+
+(async function () {
   "use strict";
 
+  let needRedirect = false;
   const search = new URLSearchParams(location.search);
 
+  try {
+    const refreshToken = search.get("refreshToken");
+    search.delete("refreshToken");
+    if (refreshToken) {
+      needRedirect = true;
+      GM_cookie.delete({ name: "steamLoginSecure" });
+      const finalizeloginReponse = await sendFormData(
+        "https://login.steampowered.com/jwt/finalizelogin",
+        {
+          nonce: refreshToken,
+          sessionid: await generateRandomHex(),
+          redir: "https://steamcommunity.com/login/home/?goto=",
+        }
+      ).then((response) => response.json());
+      await Promise.all(
+        finalizeloginReponse.transfer_info.map(({ url, params }) =>
+          sendFormData(url, {
+            steamID: finalizeloginReponse.steamID,
+            ...params,
+          })
+        )
+      );
+    }
+  } catch (error) {}
+
   const cookieStrs = search.getAll("with_cookie");
+  search.delete("with_cookie");
 
   if (cookieStrs.length > 0) {
+    needRedirect = true;
     for (const cookieStr of cookieStrs) {
       const cookie = parseCookie(cookieStr);
       GM_cookie.set({
@@ -53,8 +108,9 @@ function parseCookie(str) {
           : undefined,
       });
     }
+  }
 
-    search.delete("with_cookie");
+  if (needRedirect) {
     location.search = search.toString();
   }
 })();
